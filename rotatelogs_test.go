@@ -1,6 +1,7 @@
 package rotatelogs_test
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -419,7 +420,7 @@ func TestLogCacheMsgCount(t *testing.T) {
 		t.Errorf("Failed to create temporary directory: %s", err)
 	}
 	fmt.Println("create temporary directory:", dir)
-	defer os.RemoveAll(dir)
+	//defer os.RemoveAll(dir)
 
 	rl, err := rotatelogs.New(
 		filepath.Join(dir, "log%Y%m%d%H%M%S"),
@@ -435,7 +436,48 @@ func TestLogCacheMsgCount(t *testing.T) {
 	defer log.SetOutput(os.Stderr)
 
 	str := "Hello, %d\n"
-	for i := 0; i < 200000; i++ {
+	times := 200000
+	for i := 0; i < times; i++ {
 		log.Print(fmt.Sprintf(str, i))
 	}
+	rl.Close()
+	// check
+	files, err := ioutil.ReadDir(dir)
+	sum := 0
+	for _, item := range files {
+		n, err := countLinesInFile(dir + "/" + item.Name())
+		if err != nil {
+			t.Fatalf("count lines for %s error: %v", item.Name(), err)
+		}
+		sum += n
+	}
+	if sum != times {
+		t.Fatalf("we should get %d line, but get %d", times, sum)
+	}
+}
+
+func countLinesInFile(fileName string) (int, error) {
+	file, err := os.Open(fileName)
+
+	if err != nil {
+		return 0, err
+	}
+
+	buf := make([]byte, 1024)
+	lines := 0
+
+	for {
+		readBytes, err := file.Read(buf)
+
+		if err != nil {
+			if readBytes == 0 && err == io.EOF {
+				err = nil
+			}
+			return lines, err
+		}
+
+		lines += bytes.Count(buf[:readBytes], []byte{'\n'})
+	}
+
+	return lines, nil
 }

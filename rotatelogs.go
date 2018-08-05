@@ -98,16 +98,17 @@ func New(p string, options ...Option) (*RotateLogs, error) {
 func (rl *RotateLogs) monitor() {
 	bufs := new(bytes.Buffer)
 	var count uint
+	var iStopped bool
 	for {
 		select {
-		case msg := <-rl.msgChan:
+		case msg, ok := <-rl.msgChan:
 			//fmt.Println("receive a message:", msg)
 			count++
 			if _, err := bufs.WriteString(msg); err != nil {
 				fmt.Fprintf(os.Stderr, "put message %s to bufs error %s\n", string(msg), err.Error())
 				continue
 			}
-			if count >= rl.cacheMsgCount {
+			if count >= rl.cacheMsgCount || iStopped {
 				// flush to file
 				//fmt.Println("flush message: ", bufs.String())
 				_, err := rl.flush(bufs.Bytes())
@@ -118,15 +119,16 @@ func (rl *RotateLogs) monitor() {
 					count = 0
 				}
 			}
-
-		case <-rl.stopChan:
-			fmt.Println("receive a stop signal, current cache count:", count)
-			if count != 0 {
-				rl.flush(bufs.Bytes())
+			if !ok && iStopped {
+				// Close method has called, we should exit
+				rl.stopChan <- true
+				close(rl.stopChan)
+				fmt.Printf("return")
+				return
 			}
-			rl.stopChan <- true
-			fmt.Printf("return")
-			return
+
+		case iStopped = <-rl.stopChan:
+			fmt.Println("receive a stop signal, current cache count:", count)
 		}
 	}
 }
@@ -375,16 +377,26 @@ func (rl *RotateLogs) rotate_nolock(filename string) error {
 // call this method if you performed any writes to
 // the object. And call it at the end of the program
 // in case that any Write abandoned.
-func (rl *RotateLogs) Close() error {
-	close(rl.msgChan)
-	rl.stopChan <- true
+func (rl *RotateLogs) Close() (err error) {
+	err = rl.closeChan()
+	fmt.Println("close msg channel result:", err)
 	<-rl.stopChan
-	close(rl.stopChan)
 	if rl.outFh == nil {
-		return nil
+		return
 	}
 
-	rl.outFh.Close()
+	err = rl.outFh.Close()
 	rl.outFh = nil
-	return nil
+	return
+}
+
+func (rl *RotateLogs) closeChan() (err error) {
+	defer func() {
+		if ret := recover(); ret != nil {
+			err = ret.(error)
+		}
+	}()
+	close(rl.msgChan)
+	rl.stopChan <- true
+	return
 }
