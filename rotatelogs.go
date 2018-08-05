@@ -5,6 +5,7 @@
 package rotatelogs
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -41,6 +42,7 @@ func New(p string, options ...Option) (*RotateLogs, error) {
 	var linkName string
 	var maxAge time.Duration
 	var handler Handler
+	var cacheMsgCount uint
 
 	for _, o := range options {
 		switch o.Name() {
@@ -60,6 +62,8 @@ func New(p string, options ...Option) (*RotateLogs, error) {
 			}
 		case optkeyRotationCount:
 			rotationCount = o.Value().(uint)
+		case optkeyCacheMsgCount:
+			cacheMsgCount = o.Value().(uint)
 		case optkeyHandler:
 			handler = o.Value().(Handler)
 		}
@@ -74,7 +78,7 @@ func New(p string, options ...Option) (*RotateLogs, error) {
 		maxAge = 7 * 24 * time.Hour
 	}
 
-	return &RotateLogs{
+	rl := &RotateLogs{
 		clock:         clock,
 		eventHandler:  handler,
 		globPattern:   globPattern,
@@ -83,7 +87,48 @@ func New(p string, options ...Option) (*RotateLogs, error) {
 		pattern:       pattern,
 		rotationTime:  rotationTime,
 		rotationCount: rotationCount,
-	}, nil
+		cacheMsgCount: cacheMsgCount,
+		msgChan:       make(chan string, cacheMsgCount),
+		stopChan:      make(chan bool),
+	}
+	go rl.monitor()
+	return rl, nil
+}
+
+func (rl *RotateLogs) monitor() {
+	bufs := new(bytes.Buffer)
+	var count uint
+	for {
+		select {
+		case msg := <-rl.msgChan:
+			//fmt.Println("receive a message:", msg)
+			count++
+			if _, err := bufs.WriteString(msg); err != nil {
+				fmt.Fprintf(os.Stderr, "put message %s to bufs error %s\n", string(msg), err.Error())
+				continue
+			}
+			if count >= rl.cacheMsgCount {
+				// flush to file
+				//fmt.Println("flush message: ", bufs.String())
+				_, err := rl.flush(bufs.Bytes())
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "%s\n", err.Error())
+				} else {
+					bufs.Reset()
+					count = 0
+				}
+			}
+
+		case <-rl.stopChan:
+			fmt.Println("receive a stop signal, current cache count:", count)
+			if count != 0 {
+				rl.flush(bufs.Bytes())
+			}
+			rl.stopChan <- true
+			fmt.Printf("return")
+			return
+		}
+	}
 }
 
 func (rl *RotateLogs) genFilename() string {
@@ -115,6 +160,13 @@ func (rl *RotateLogs) genFilename() string {
 // If we have reached rotation time, the target file gets
 // automatically rotated, and also purged if necessary.
 func (rl *RotateLogs) Write(p []byte) (n int, err error) {
+	//fmt.Println("write a message:", string(p))
+	rl.msgChan <- string(p)
+	n = len(p)
+	return
+}
+
+func (rl *RotateLogs) flush(p []byte) (n int, err error) {
 	// Guard against concurrent writes
 	rl.mutex.Lock()
 	defer rl.mutex.Unlock()
@@ -135,6 +187,7 @@ func (rl *RotateLogs) getWriter_nolock(bailOnRotateFail, useGenerationalNames bo
 	// to log to, which may be newer than rl.currentFilename
 	filename := rl.genFilename()
 	if previousFn != filename {
+		//fmt.Printf("need to rotate from %s to %s\n", previousFn, filename)
 		generation = 0
 	} else {
 		if !useGenerationalNames {
@@ -320,11 +373,13 @@ func (rl *RotateLogs) rotate_nolock(filename string) error {
 
 // Close satisfies the io.Closer interface. You must
 // call this method if you performed any writes to
-// the object.
+// the object. And call it at the end of the program
+// in case that any Write abandoned.
 func (rl *RotateLogs) Close() error {
-	rl.mutex.Lock()
-	defer rl.mutex.Unlock()
-
+	close(rl.msgChan)
+	rl.stopChan <- true
+	<-rl.stopChan
+	close(rl.stopChan)
 	if rl.outFh == nil {
 		return nil
 	}

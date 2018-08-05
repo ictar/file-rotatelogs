@@ -45,6 +45,9 @@ type RotateLogs struct {
 	pattern       *strftime.Strftime
 	rotationTime  time.Duration
 	rotationCount uint
+	cacheMsgCount uint
+	msgChan       chan string
+	stopChan      chan bool
 }
 
 // Clock is the interface used by the RotateLogs

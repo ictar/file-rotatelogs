@@ -3,7 +3,7 @@ package rotatelogs
 import (
 	"time"
 
-	"github.com/lestrrat-go/file-rotatelogs/internal/option"
+	"github.com/ictar/file-rotatelogs/internal/option"
 )
 
 const (
@@ -13,6 +13,7 @@ const (
 	optkeyMaxAge        = "max-age"
 	optkeyRotationTime  = "rotation-time"
 	optkeyRotationCount = "rotation-count"
+	optkeyCacheMsgCount = "cache-msg-count"
 )
 
 // WithClock creates a new Option that sets a clock
@@ -64,6 +65,13 @@ func WithRotationTime(d time.Duration) Option {
 // purged from the file system.
 func WithRotationCount(n uint) Option {
 	return option.New(optkeyRotationCount, n)
+}
+
+// WithCacheMsgCount creates a new Option that sets the
+// number of cached message should be kept before they are
+// wroten to the file system.
+func WithCacheMsgCount(n uint) Option {
+	return option.New(optkeyCacheMsgCount, n)
 }
 
 // WithHandler creates a new Option that specifies the

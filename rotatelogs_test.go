@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	rotatelogs "github.com/ictar/file-rotatelogs"
 	"github.com/jonboulle/clockwork"
-	rotatelogs "github.com/lestrrat-go/file-rotatelogs"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 )
@@ -380,13 +380,13 @@ func TestGHIssue23(t *testing.T) {
 			Clock    rotatelogs.Clock
 		}{
 			{
-				Expected: filepath.Join(dir, strings.ToLower(strings.Replace(locName, "/", "_", -1)) + ".201806010000.log"),
+				Expected: filepath.Join(dir, strings.ToLower(strings.Replace(locName, "/", "_", -1))+".201806010000.log"),
 				Clock: ClockFunc(func() time.Time {
 					return time.Date(2018, 6, 1, 3, 18, 0, 0, loc)
 				}),
 			},
 			{
-				Expected: filepath.Join(dir, strings.ToLower(strings.Replace(locName, "/", "_", -1)) + ".201712310000.log"),
+				Expected: filepath.Join(dir, strings.ToLower(strings.Replace(locName, "/", "_", -1))+".201712310000.log"),
 				Clock: ClockFunc(func() time.Time {
 					return time.Date(2017, 12, 31, 23, 52, 0, 0, loc)
 				}),
@@ -410,5 +410,32 @@ func TestGHIssue23(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestLogCacheMsgCount(t *testing.T) {
+	dir, err := ioutil.TempDir("", "file-rotatelogs-test")
+	if err != nil {
+		t.Errorf("Failed to create temporary directory: %s", err)
+	}
+	fmt.Println("create temporary directory:", dir)
+	defer os.RemoveAll(dir)
+
+	rl, err := rotatelogs.New(
+		filepath.Join(dir, "log%Y%m%d%H%M%S"),
+		rotatelogs.WithCacheMsgCount(3),
+		rotatelogs.WithRotationTime(1*time.Second),
+	)
+	if !assert.NoError(t, err, `rotatelogs.New should succeed`) {
+		return
+	}
+	defer rl.Close()
+
+	log.SetOutput(rl)
+	defer log.SetOutput(os.Stderr)
+
+	str := "Hello, %d\n"
+	for i := 0; i < 200000; i++ {
+		log.Print(fmt.Sprintf(str, i))
 	}
 }
